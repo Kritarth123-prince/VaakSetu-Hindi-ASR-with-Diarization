@@ -1,7 +1,5 @@
 # VaakSetu
 ## Hindi ASR with Speaker Diarization and Confidence Scoring
-### B.Tech Major Project — CSE 8th Semester
-**Ganga Institute of Technology & Management, Kablana, Jhajjar**
 
 ---
 
