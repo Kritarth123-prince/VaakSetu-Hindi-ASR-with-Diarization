@@ -1,0 +1,28 @@
+# VaakSetu — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# ── Core ASR (fairseq-based pipeline) ────────────────────────────────────────
+torch>=2.0.0
+torchaudio>=2.0.0
+fairseq
+omegaconf
+
+# ── Finetuning ────────────────────────────────────────────────────────────────
+transformers>=4.35.0
+evaluate
+jiwer                  # WER computation backend
+
+# ── Speaker Diarization ───────────────────────────────────────────────────────
+pyannote.audio>=3.1.0  # requires HuggingFace token + licence acceptance
+
+# ── Punctuation Restoration ───────────────────────────────────────────────────
+# transformers already listed above
+
+# ── Real-time Monitoring ──────────────────────────────────────────────────────
+watchdog
+
+# ── Batch Progress ────────────────────────────────────────────────────────────
+tqdm
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+numpy
