@@ -1,24 +1,3 @@
-"""
-=============================================================================
-  VaakSetu — Inference Pipeline
-  Project : Hindi ASR with Speaker Diarization and Confidence Scoring
-  Model   : AI4Bharat XLSR (wav2vec 2.0), finetuned on 880-sample Hindi dataset
-  Server  : Yotta / DGX4 with NVIDIA GPU
-
-  Pipeline Stages:
-    1. File readiness check
-    2. Audio resampling (→ 16 kHz)
-    3. Speaker Diarization  (pyannote.audio 3.1)
-    4. Model loading (cached)
-    5. Audio chunking  (30-second windows)
-    6. CTC inference + Confidence Scoring
-    7. Punctuation Restoration
-    8. Output: .txt  |  .srt  |  .vtt  |  .json
-    9. Batch mode  (--batch flag)
-   10. Real-time folder monitoring (watchdog)
-=============================================================================
-"""
-
 import os
 import re
 import time
