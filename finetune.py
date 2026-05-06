@@ -1,14 +1,3 @@
-"""
-=============================================================================
-  VaakSetu — Finetuning Pipeline
-  Project : Hindi ASR with Speaker Diarization and Confidence Scoring
-  Base    : AI4Bharat XLSR (wav2vec 2.0) — indicwav2vec_v1_hindi
-  Dataset : 880-sample Hindi speech dataset (CSV: filename, ground_truth)
-  Server  : Yotta / DGX4 with NVIDIA A100 / V100 GPU
-  Loss    : Connectionist Temporal Classification (CTC)
-=============================================================================
-"""
-
 import os
 import re
 import time
