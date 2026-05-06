@@ -62,6 +62,36 @@ pip install -r requirements.txt
 #    Then export your token:
 export HF_TOKEN=your_huggingface_token_here
 ```
+---
+
+## 📦 Model Download
+
+The trained model checkpoint (~3.6GB) is hosted on Hugging Face:
+
+👉 [https://huggingface.co/kritarth-ranjan/VaakSetu](https://huggingface.co/kritarth-ranjan/VaakSetu)
+
+> ⚠️ Due to GitHub file size limits, the model is not included in this repository.
+> Please download it separately from Hugging Face.
+
+### Option 1 — Download Manually
+
+1. Open the link above
+2. Download `checkpoint_best.pt`
+3. Place it in:
+
+```
+vaaksetu/model/checkpoint_best.pt
+```
+
+---
+
+### Option 2 — Clone Directly (Recommended)
+
+```bash
+git clone https://huggingface.co/kritarth-ranjan/VaakSetu model/
+```
+
+This will automatically place the model in the correct folder.
 
 ---
 
