@@ -18,7 +18,9 @@ from fairseq.tasks.audio_finetuning import AudioFinetuningTask
 from fairseq import checkpoint_utils
 from fairseq.data.dictionary import Dictionary
 
-# ── Optional imports ──────────────────────────────────────────────────────────
+if hasattr(torch.serialization, 'add_safe_globals'):
+    torch.serialization.add_safe_globals([Dictionary])
+
 try:
     from pyannote.audio import Pipeline as DiarizationPipeline
     DIARIZATION_AVAILABLE = True
@@ -33,7 +35,6 @@ except ImportError:
     PUNCTUATION_AVAILABLE = False
     logging.warning("transformers not installed — punctuation restoration disabled.")
 
-# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s — %(message)s",
@@ -41,7 +42,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Global caches ─────────────────────────────────────────────────────────────
 transcribed_files  = set()
 model_cache        = None   # (model, task, grapheme_dict)
 diarization_cache  = None   # pyannote pipeline
@@ -49,16 +49,7 @@ punctuation_cache  = None   # HuggingFace punctuation pipeline
 
 SUPPORTED_EXT = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
 
-
-# =============================================================================
-#  1. FILE READINESS
-# =============================================================================
-
 def is_file_fully_copied(file_path, check_interval=1, max_checks=6):
-    """
-    Poll file size until stable — ensures the file is fully written
-    before we start processing it.
-    """
     previous_size = -1
     for _ in range(max_checks):
         current_size = os.path.getsize(file_path)
@@ -69,13 +60,7 @@ def is_file_fully_copied(file_path, check_interval=1, max_checks=6):
         check_interval = min(check_interval * 2, 8)
     return False
 
-
-# =============================================================================
-#  2. AUDIO UTILITIES
-# =============================================================================
-
 def resample_audio(audio_path, target_sr=16000):
-    """Resample audio in-place to target_sr (default 16 kHz)."""
     waveform, orig_sr = torchaudio.load(audio_path)
     if orig_sr != target_sr:
         resampler = torchaudio.transforms.Resample(orig_freq=orig_sr, new_freq=target_sr)
@@ -86,10 +71,6 @@ def resample_audio(audio_path, target_sr=16000):
 
 
 def split_audio(audio_path, max_duration=30, chunks_dir="chunks"):
-    """
-    Split audio into ≤max_duration second chunks.
-    Returns list of (chunk_path, waveform, start_sec, end_sec).
-    """
     os.makedirs(chunks_dir, exist_ok=True)
     waveform, sr     = torchaudio.load(audio_path)
     total_duration   = waveform.size(1) / sr
@@ -113,7 +94,6 @@ def split_audio(audio_path, max_duration=30, chunks_dir="chunks"):
 
 
 def preprocess_audio(waveform, sample_rate, task):
-    """Zero-mean, unit-max normalisation."""
     waveform = waveform - waveform.mean()
     max_val  = waveform.abs().max()
     if max_val > 0:
@@ -121,12 +101,7 @@ def preprocess_audio(waveform, sample_rate, task):
     return waveform
 
 
-# =============================================================================
-#  3. MODEL LOADING (cached)
-# =============================================================================
-
 def load_model_and_dict(config_path, checkpoint_path, dictionary_path, use_cuda=True):
-    """Load finetuned wav2vec 2.0 model + grapheme dictionary. Cached after first call."""
     global model_cache
     if model_cache is None:
         logger.info("Loading ASR model (first call — this may take a moment)...")
@@ -147,13 +122,7 @@ def load_model_and_dict(config_path, checkpoint_path, dictionary_path, use_cuda=
 
     return model_cache
 
-
-# =============================================================================
-#  4. SPEAKER DIARIZATION
-# =============================================================================
-
 def load_diarization_pipeline(hf_token=None):
-    """Load pyannote.audio 3.1 speaker diarization pipeline (cached)."""
     global diarization_cache
     if diarization_cache is None and DIARIZATION_AVAILABLE:
         logger.info("Loading speaker diarization pipeline...")
@@ -171,10 +140,6 @@ def load_diarization_pipeline(hf_token=None):
 
 
 def diarize_audio(audio_path, hf_token=None):
-    """
-    Run speaker diarization on an audio file.
-    Returns list of {start, end, speaker} dicts.
-    """
     pipeline = load_diarization_pipeline(hf_token)
     if pipeline is None:
         return []
@@ -196,7 +161,6 @@ def diarize_audio(audio_path, hf_token=None):
 
 
 def assign_speaker(diarization_segments, chunk_start, chunk_end):
-    """Return the speaker with maximum overlap in the given time range."""
     if not diarization_segments:
         return "SPEAKER_00"
     speaker_time = {}
@@ -206,23 +170,13 @@ def assign_speaker(diarization_segments, chunk_start, chunk_end):
             speaker_time[seg["speaker"]] = speaker_time.get(seg["speaker"], 0) + overlap
     return max(speaker_time, key=speaker_time.get) if speaker_time else "SPEAKER_00"
 
-
-# =============================================================================
-#  5. CTC DECODING + CONFIDENCE SCORING
-# =============================================================================
-
 def ctc_decode_with_confidence(logits, dictionary):
-    """
-    Greedy CTC decode with per-segment confidence score.
-    logits : tensor of shape (T, vocab) or (1, T, vocab) — log-probabilities
-    Returns (decoded_tokens, confidence_float)
-    """
     if logits.dim() == 3:
         logits = logits.squeeze(0)
 
-    probs                   = torch.exp(logits)              # log-probs → probs
-    best_probs, best_tokens = probs.max(dim=-1)              # (T,)
-    confidence              = best_probs.mean().item()       # avg per-frame confidence
+    probs                   = torch.exp(logits)
+    best_probs, best_tokens = probs.max(dim=-1)
+    confidence              = best_probs.mean().item()
 
     tokens_list = best_tokens.squeeze().tolist()
     if isinstance(tokens_list, int):
@@ -238,16 +192,9 @@ def ctc_decode_with_confidence(logits, dictionary):
 
 
 def tokens_to_string(tokens, dictionary):
-    """Convert token index list → readable string."""
     return post_process(dictionary.string(tokens), symbol='letter')
 
-
-# =============================================================================
-#  6. PUNCTUATION RESTORATION
-# =============================================================================
-
 def load_punctuation_model():
-    """Load multilingual punctuation restoration model (cached)."""
     global punctuation_cache
     if punctuation_cache is None and PUNCTUATION_AVAILABLE:
         logger.info("Loading punctuation restoration model...")
@@ -265,7 +212,6 @@ def load_punctuation_model():
 
 
 def restore_punctuation(text):
-    """Insert commas, periods, question marks and capitalise sentences."""
     model = load_punctuation_model()
     if model is None or not text.strip():
         return text
@@ -284,12 +230,7 @@ def restore_punctuation(text):
     except Exception as e:
         logger.warning(f"Punctuation restoration failed: {e}")
         return text
-
-
-# =============================================================================
-#  7. SUBTITLE WRITERS  (SRT + VTT)
-# =============================================================================
-
+        
 def _to_srt_ts(sec):
     td   = timedelta(seconds=sec)
     tot  = int(td.total_seconds())
@@ -320,11 +261,6 @@ def write_vtt(segments, path):
             f.write(f"[{seg['speaker']}] {seg['text']}\n\n")
     logger.info(f"VTT → {path}")
 
-
-# =============================================================================
-#  8. CORE TRANSCRIPTION
-# =============================================================================
-
 def transcribe_audio(
     config_path,
     checkpoint_path,
@@ -335,39 +271,29 @@ def transcribe_audio(
     enable_diarization=True,
     enable_punctuation=True,
 ):
-    """
-    Full pipeline for a single audio file.
-    Outputs: .txt  .srt  .vtt  .json  inside transcripts/
-    Returns path to .txt output or None on failure.
-    """
+    
     t0        = time.time()
     base_name = os.path.splitext(os.path.basename(audio_path))[0]
     out_dir   = "transcripts"
     os.makedirs(out_dir, exist_ok=True)
 
     try:
-        # ── Stage 1: File readiness ───────────────────────────────────────
         if not is_file_fully_copied(audio_path):
             logger.warning(f"File still being written — skipping: {audio_path}")
             return None
 
-        # ── Stage 2: Resample ─────────────────────────────────────────────
         audio_path = resample_audio(audio_path)
 
-        # ── Stage 3: Speaker Diarization ──────────────────────────────────
         diar_segs = []
         if enable_diarization:
             diar_segs = diarize_audio(audio_path, hf_token=hf_token)
 
-        # ── Stage 4: Load model ───────────────────────────────────────────
         model, task, grapheme_dict = load_model_and_dict(
             config_path, checkpoint_path, dictionary_path, use_cuda
         )
 
-        # ── Stage 5: Chunk audio ──────────────────────────────────────────
         chunks = split_audio(audio_path)
 
-        # ── Stage 6: CTC inference + confidence scoring ───────────────────
         results = []
         for chunk_path, waveform, c_start, c_end in chunks:
             waveform = preprocess_audio(
@@ -403,18 +329,15 @@ def transcribe_audio(
             if chunk_path != audio_path:
                 os.remove(chunk_path)
 
-        # ── Stage 7: Punctuation restoration ─────────────────────────────
         if enable_punctuation:
             for seg in results:
                 seg["text"] = restore_punctuation(seg["text"])
 
-        # ── Stage 8: Write outputs ────────────────────────────────────────
         overall_conf = (
             sum(s["confidence"] for s in results) / len(results) if results else 0.0
         )
         n_speakers = len(set(s["speaker"] for s in results))
 
-        # .txt
         txt_path = os.path.join(out_dir, f"{base_name}.txt")
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(f"File       : {audio_path}\n")
@@ -429,13 +352,11 @@ def transcribe_audio(
                     f"{seg['text']}\n"
                 )
 
-        # .srt / .vtt
         srt_path = os.path.join(out_dir, f"{base_name}.srt")
         vtt_path = os.path.join(out_dir, f"{base_name}.vtt")
         write_srt(results, srt_path)
         write_vtt(results, vtt_path)
 
-        # .json
         elapsed  = round(time.time() - t0, 2)
         metadata = {
             "file":             audio_path,
@@ -450,7 +371,6 @@ def transcribe_audio(
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
 
-        # ── Console summary ───────────────────────────────────────────────
         logger.info("=" * 60)
         logger.info(f"FILE       : {audio_path}")
         logger.info(f"SPEAKERS   : {n_speakers}")
@@ -458,10 +378,9 @@ def transcribe_audio(
         logger.info(f"TIME       : {elapsed}s")
         logger.info(f"OUTPUTS    : .txt  .srt  .vtt  .json  → {out_dir}/")
         logger.info("=" * 60)
-        print("\n--- TRANSCRIPT ---")
-        for seg in results:
-            print(f"[{seg['speaker']}] {seg['text']}")
-        print("------------------\n")
+        print(f"\n✅ TRANSCRIPTION COMPLETE: {os.path.basename(audio_path)}")
+        print(f"⏱️  Time Taken: {elapsed}s")
+        print(f"📄 Saved to: {txt_path}\n")
 
         return txt_path
 
@@ -478,16 +397,12 @@ def transcribe_audio(
         raise
 
 
-# =============================================================================
-#  9. BATCH PROCESSING
-# =============================================================================
-
 def batch_transcribe(
     config_path, checkpoint_path, dictionary_path,
     input_dir, use_cuda=True, hf_token=None,
     enable_diarization=True, enable_punctuation=True,
 ):
-    """Process all supported audio files in input_dir with a progress bar."""
+    
     files = [
         os.path.join(input_dir, f)
         for f in os.listdir(input_dir)
@@ -514,14 +429,7 @@ def batch_transcribe(
 
     logger.info(f"Batch complete — ✓ {success} succeeded | ✗ {failed} failed.")
 
-
-# =============================================================================
-#  10. REAL-TIME FOLDER MONITORING (watchdog)
-# =============================================================================
-
 class AudioHandler(FileSystemEventHandler):
-    """Watches a directory and auto-transcribes any new audio file."""
-
     def __init__(
         self, config_path, checkpoint_path, dictionary_path,
         use_cuda=True, hf_token=None,
@@ -552,11 +460,6 @@ class AudioHandler(FileSystemEventHandler):
         )
         transcribed_files.add(audio_path)
 
-
-# =============================================================================
-#  CLI + MAIN
-# =============================================================================
-
 def parse_args():
     p = argparse.ArgumentParser(
         description="VaakSetu — Hindi ASR Inference Pipeline"
@@ -569,16 +472,16 @@ def parse_args():
                    help="Disable punctuation restoration.")
     p.add_argument("--cpu",              action="store_true",
                    help="Force CPU inference.")
-    p.add_argument("--hf-token",         type=str, default=None,
+    p.add_argument("--hf-token",         type=str, default="<hugging_face_API_KEY>",
                    help="HuggingFace token for pyannote diarization model.")
     p.add_argument("--input-dir",        type=str,
-                   default="/raid/ganesh/pdadiga/suryansh/w2v2-txt-transcription/input/")
+                   default="input/")
     p.add_argument("--config",           type=str,
-                   default="/raid/ganesh/pdadiga/suryansh/w2v2-txt-transcription/config/ai4b_xlsr.yaml")
+                   default="config/ai4b_xlsr.yaml")
     p.add_argument("--dictionary",       type=str,
-                   default="/raid/ganesh/pdadiga/suryansh/w2v2-txt-transcription/config/dic.ltr.txt")
+                   default="config/dic.ltr.txt")
     p.add_argument("--checkpoint",       type=str,
-                   default="/raid/ganesh/pdadiga/suryansh/w2v2-txt-transcription/model/checkpoint_best.pt")
+                   default="model/checkpoint_best.pt")
     return p.parse_args()
 
 
@@ -597,7 +500,13 @@ def main():
     logger.info("=" * 60)
     logger.info("  VaakSetu — Hindi ASR Inference Pipeline")
     logger.info(f"  Mode        : {'BATCH' if args.batch else 'MONITOR'}")
-    logger.info(f"  GPU         : {use_cuda and torch.cuda.is_available()}")
+    logger.info(f"  PyTorch     : {torch.__version__}")
+    
+    cuda_available = torch.cuda.is_available()
+    logger.info(f"  GPU Support : {cuda_available}")
+    if use_cuda and not cuda_available:
+        logger.warning("  GPU requested but CUDA is not available. Falling back to CPU.")
+    
     logger.info(f"  Diarization : {enable_diar}")
     logger.info(f"  Punctuation : {enable_punc}")
     logger.info("=" * 60)
